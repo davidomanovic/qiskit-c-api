@@ -68,32 +68,6 @@ std::unordered_map<std::string, uint64_t> generate_counts_uniform(
     return counts;
 }
 
-// Convert an array of boost::dynamic_bitset<> to string-based BitString objects.
-static auto bitsets_to_bitstrings(const std::vector<boost::dynamic_bitset<>> &bitsets)
-    -> std::vector<BitString>
-{
-    std::vector<BitString> bitstrings;
-    bitstrings.reserve(bitsets.size());
-    std::string str;
-    for (const auto &bitset : bitsets) {
-        boost::to_string(bitset, str);
-        bitstrings.emplace_back(str);
-    }
-    return bitstrings;
-}
-// Convert string-based BitString objects back to boost::dynamic_bitset<>.
-// Internal representation for efficient bitwise operations in configuration recovery.
-static auto bitsets_from_bitstrings(const std::vector<BitString> &bitstrings)
-    -> std::vector<boost::dynamic_bitset<>>
-{
-    std::vector<boost::dynamic_bitset<>> bitsets;
-    bitsets.reserve(bitsets.size());
-    for (const auto &bitstring : bitstrings) {
-        bitsets.emplace_back(bitstring.to_string());
-    }
-    return bitsets;
-}
-
 // Load initial alpha/beta occupancies from a JSON file.
 // Format: { "init_occupancies": [ alpha..., beta... ] }  (even length)
 // After splitting, reverse each to match the internal right-to-left convention.
@@ -161,10 +135,10 @@ normalize_counts_dict(const std::unordered_map<std::string, uint64_t> &counts)
 
 // Transform counts (bitstring -> count) into parallel arrays (bitstrings,
 // probabilities).
-std::pair<std::vector<BitString>, std::vector<double>>
+std::pair<std::vector<boost::dynamic_bitset<>>, std::vector<double>>
 counts_to_arrays(const std::unordered_map<std::string, uint64_t> &counts)
 {
-    std::vector<BitString> bs_mat;
+    std::vector<boost::dynamic_bitset<>> bs_mat;
     std::vector<double> freq_arr;
 
     if (counts.empty())
@@ -175,7 +149,7 @@ counts_to_arrays(const std::unordered_map<std::string, uint64_t> &counts)
 
     // Convert bitstrings to a 2D boolean matrix
     for (const auto &[bitstring, _] : prob_dict) {
-        bs_mat.push_back(BitString(bitstring));
+        bs_mat.emplace_back(bitstring);
     }
 
     // Convert probabilities to a 1D array
@@ -376,8 +350,7 @@ int main(int argc, char *argv[])
         ////// Configuration Recovery, Subsampling, Diagonalization //////
 
         // Expand counts (map) into (bitstrings[], probs[]).
-        auto [bitstring_matrix_full_, probs_arr_full] = counts_to_arrays(counts);
-        auto bitstring_matrix_full = bitsets_from_bitstrings(bitstring_matrix_full_);
+        auto [bitstring_matrix_full, probs_arr_full] = counts_to_arrays(counts);
 
         std::vector<boost::dynamic_bitset<>> bs_mat_tmp;
         std::vector<double> probs_arr_tmp;
@@ -429,8 +402,8 @@ int main(int argc, char *argv[])
                 // Write alpha-determinants file for SBD input (includes run id /
                 // iteration for traceability).
                 diag_data.adetfile = write_alphadets_file(
-                    sqd_data, norb, num_elec_a, bitsets_to_bitstrings(batch),
-                    sqd_data.samples_per_batch * 2, i_recovery
+                    sqd_data, norb, num_elec_a, batch, sqd_data.samples_per_batch * 2,
+                    i_recovery
                 );
             }
             // Run SBD to get energy and batch occupancies (interleaved alpha/beta...).

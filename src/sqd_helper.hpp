@@ -27,6 +27,8 @@
 #define USE_MATH_DEFINES
 #include <cmath>
 
+#include "boost/dynamic_bitset.hpp"
+
 #include "mpi.h"
 #include "sbd/sbd.h"
 
@@ -48,203 +50,9 @@ std::string get_time(bool compact = false)
     return ss.str();
 }
 
-// simple vector that replaces std::vector<bool>
-// [false, false, true, true] is data[0]=0b0011
-// [false, false, false, true, true] is data[0]=0b00011
-// [false, true, false, true x 64] is data[0]=0b010, data[1]= 0xffff
-struct UArrayString {
-
-    std::vector<uint64_t> data; // use data[0] for padding
-    size_t nbits;
-    const static size_t REG_SIZE = 64;
-
-    static size_t VEC_SIZE(size_t nbits)
-    {
-        return nbits / REG_SIZE + ((nbits % REG_SIZE) == 0 ? 0 : 1);
-    }
-
-    UArrayString() : nbits(0)
-    {
-    }
-
-    UArrayString(size_t nbits_) : data(std::vector<uint64_t>(nbits_)), nbits(nbits_)
-    {
-    }
-    UArrayString(uint64_t src, size_t nbits);
-    UArrayString(const std::vector<uint64_t> &src, const size_t nbits);
-    UArrayString(const std::vector<bool> &src);
-    UArrayString(std::initializer_list<bool> init);
-    UArrayString(const std::string &src);
-
-    UArrayString(const UArrayString &src)
-    {
-        data = src.data;
-        nbits = src.nbits;
-    }
-
-    bool get(size_t pos) const;
-
-    bool set(size_t pos, bool value);
-
-    UArrayString &operator=(const UArrayString &src)
-    {
-        data = src.data;
-        nbits = src.nbits;
-        return *this;
-    }
-
-    UArrayString &operator=(const std::string &src)
-    {
-        auto d = UArrayString(src);
-        data = d.data;
-        nbits = d.nbits;
-        return *this;
-    }
-
-    bool operator==(const UArrayString &other) const
-    {
-        return to_string() == other.to_string();
-    }
-
-    bool operator!=(const UArrayString &other) const
-    {
-        return to_string() != other.to_string();
-    }
-
-    // convert to other data types
-    std::string to_string() const;
-    std::vector<bool> to_vector() const;
-
-    size_t size() const
-    {
-        return nbits;
-    }
-
-    size_t get_counts(const size_t from, const size_t until, const bool value) const;
-
-    std::vector<size_t>
-    get_indices(const size_t from, const size_t unti, const bool value) const;
-
-    inline bool operator[](const size_t idx) const
-    {
-        return get(idx);
-    }
-};
-
-UArrayString::UArrayString(
-    uint64_t src, // NOLINT(bugprone-easily-swappable-parameters)
-    size_t nbits_
-)                              // NOLINT(bugprone-easily-swappable-parameters)
-  : data({src}), nbits(nbits_) // NOLINT(bugprone-easily-swappable-parameters)
-{
-    if (nbits_ > 1)
-        data.resize(nbits_, 0UL);
-}
-
-UArrayString::UArrayString(const std::vector<uint64_t> &src, const size_t nbits_)
-  : data({src}), nbits(nbits_)
-{
-}
-
-UArrayString::UArrayString(const std::vector<bool> &src)
-  : data(VEC_SIZE(src.size())), nbits(src.size())
-{
-    for (size_t i = 0; i < src.size(); ++i)
-        set(i, src[i]);
-}
-
-UArrayString::UArrayString(const std::string &src)
-  : data(VEC_SIZE(src.size())), nbits(src.size())
-{
-    for (size_t i = 0; i < src.size(); ++i)
-        set(i, src[i] == '1');
-}
-
-UArrayString::UArrayString(std::initializer_list<bool> init)
-{
-    std::vector<bool> src(init);
-    nbits = src.size();
-    data = std::vector<uint64_t>(VEC_SIZE(src.size()));
-    for (size_t i = 0; i < src.size(); ++i)
-        set(i, src[i]);
-}
-
-bool UArrayString::get(size_t pos) const
-{
-    size_t padding = REG_SIZE - (nbits % REG_SIZE);
-    size_t global_idx = padding + (nbits - pos - 1);
-    size_t reg_pos = global_idx / REG_SIZE;
-    size_t uint_shift = REG_SIZE - global_idx % REG_SIZE - 1;
-
-    return (data[reg_pos] & (1UL << uint_shift)) != 0UL;
-}
-// 64 - ((62 + 0) % 64) - 1
-// 64 - ((62 + 1) % 64) - 1
-bool UArrayString::set(size_t pos, bool value)
-{
-    size_t padding = REG_SIZE - (nbits % REG_SIZE);
-    size_t global_idx = padding + (nbits - pos - 1);
-    size_t reg_pos = global_idx / REG_SIZE;
-    size_t uint_shift = REG_SIZE - global_idx % REG_SIZE - 1;
-
-    bool ret = (data[reg_pos] & (1UL << uint_shift)) != 0UL;
-
-    if (value)
-        data[reg_pos] |= (1ULL << uint_shift);
-    else
-        data[reg_pos] &= ~(1ULL << uint_shift);
-
-    return ret;
-}
-
-std::string UArrayString::to_string(void) const
-{
-    std::string str(nbits, '0');
-    for (size_t i = 0; i < nbits; i++)
-        if (get(i))
-            str[i] = '1';
-    return str;
-}
-
-std::vector<bool> UArrayString::to_vector(void) const
-{
-    std::vector<bool> ret(nbits, false);
-    for (size_t i = 0; i < nbits; i++)
-        if (get(i))
-            ret[i] = true;
-    return ret;
-}
-
-size_t UArrayString::get_counts(
-    const size_t from,  // NOLINT(bugprone-easily-swappable-parameters)
-    const size_t until, // NOLINT(bugprone-easily-swappable-parameters)
-    const bool value
-) const // NOLINT(bugprone-easily-swappable-parameters)
-{
-    size_t ret = 0;
-    for (size_t i = from; i < until; ++i)
-        if (get(i) == value)
-            ++ret;
-    return ret;
-}
-
-std::vector<size_t> UArrayString::get_indices(
-    const size_t from,  // NOLINT(bugprone-easily-swappable-parameters)
-    const size_t until, // NOLINT(bugprone-easily-swappable-parameters)
-    const bool value
-) const
-{
-    std::vector<size_t> ret;
-    for (size_t i = from; i < until; ++i)
-        if (get(i) == value)
-            ret.push_back(i - from);
-    return ret;
-}
-
-typedef UArrayString BitString;
-
 std::pair<std::vector<uint64_t>, std::vector<uint64_t>> bitstring_matrix_to_ci_strs(
-    const std::vector<BitString> &bitstring_matrix, bool open_shell = false
+    const std::vector<boost::dynamic_bitset<>> &bitstring_matrix,
+    bool open_shell = false
 )
 {
     size_t num_configs = bitstring_matrix.size();
@@ -256,14 +64,12 @@ std::pair<std::vector<uint64_t>, std::vector<uint64_t>> bitstring_matrix_to_ci_s
     for (size_t config = 0; config < num_configs; ++config) {
         const auto &row = bitstring_matrix[config];
 
-        for (size_t i = 0; i < norb; ++i)
-            if (row[i])
-                ci_str_left[config] += static_cast<uint64_t>(std::pow(2, norb - 1 - i));
-
-        for (size_t i = 0; i < norb; ++i)
-            if (row[i + norb])
-                ci_str_right[config] +=
-                    static_cast<uint64_t>(std::pow(2, norb - 1 - i));
+        for (size_t i = 0; i < norb; ++i) {
+            ci_str_right[config] ^= static_cast<std::uint64_t>(row[i]) << i;
+        }
+        for (size_t i = 0; i < norb; ++i) {
+            ci_str_left[config] ^= static_cast<std::uint64_t>(row[i + norb]) << i;
+        }
     }
 
     std::set<uint64_t> unique_ci_str_left(ci_str_left.begin(), ci_str_left.end());
@@ -429,7 +235,7 @@ std::string write_alphadets_file(
     const SQD &sqd_data,
     const size_t norb,     // NOLINT(bugprone-easily-swappable-parameters)
     const size_t num_elec, // NOLINT(bugprone-easily-swappable-parameters)
-    const std::vector<BitString> &batch,
+    const std::vector<boost::dynamic_bitset<>> &batch,
     const size_t
         maximum_numbers_of_ctrs, // NOLINT(bugprone-easily-swappable-parameters)
     const size_t i_recovery
