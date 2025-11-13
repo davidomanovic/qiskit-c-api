@@ -303,7 +303,14 @@ int main(int argc, char** argv) {
 
             // Diagonalize (SBD). Returns energy and interleaved occupancies [a0,b0,a1,b1,...]
             auto [energy_sci, occs_batch] = sbd_main(sqd_data.comm, diag_data);
-            log(sqd_data, std::vector<std::string>{ "energy: ", std::to_string(energy_sci) });
+            double energy_root = energy_sci;
+            MPI_Bcast(&energy_root, 1, MPI_DOUBLE, /*root=*/0, sqd_data.comm);
+            
+            if (sqd_data.mpi_rank == 0) {
+                log(sqd_data, std::vector<std::string>{
+                    "energy: ", std::to_string(energy_root)
+                });
+            }
 
             if (sqd_data.mpi_rank == 0) {
                 const std::size_t norb_sz = latest_occupancies[0].size();
